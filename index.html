@@ -95,6 +95,16 @@ th { color: #94a3b8; font-weight: 600; text-transform: uppercase; font-size: 0.7
         <button onclick="submitNewAlert()" style="padding:0 20px;">Set Alert</button>
       </div>
       <p class="note">Alerts are saved in this browser and checked live while this page is open.</p>
+      <h2 style="margin-top:22px;">Telegram Alerts</h2>
+      <div style="display:flex; gap:10px; margin-top:10px;">
+        <input type="password" id="tgToken" placeholder="Bot token (from @BotFather)" autocomplete="off" style="flex:2;">
+        <input type="text" id="tgChatId" placeholder="Chat ID" style="flex:1;">
+      </div>
+      <div style="display:flex; gap:10px; margin-top:10px;">
+        <button onclick="saveTelegramSettings()" style="flex:1; padding:10px;">Save</button>
+        <button onclick="testTelegram()" style="flex:1; padding:10px;">Send Test</button>
+      </div>
+      <p class="note" id="tgStatus">Token and chat ID are stored only in this browser (not in the code).</p>
     </div>
     <div class="card" style="padding:20px;">
       <h2>Active Target Alert Monitor Grid</h2>
@@ -157,7 +167,46 @@ function beep() {
     });
   } catch (e) {}
 }
+/* ---------- Telegram ---------- */
+var TG_KEY = "cryptoTerminalTelegram.v1";
+var TELEGRAM_CHAT_ID_DEFAULT = "5387941921";
+function getTelegram() {
+  var c = {};
+  try { c = JSON.parse(localStorage.getItem(TG_KEY)) || {}; } catch (e) {}
+  return { token: c.token || "", chatId: c.chatId || TELEGRAM_CHAT_ID_DEFAULT };
+}
+function loadTelegramFields() {
+  var c = getTelegram();
+  document.getElementById("tgToken").value = c.token;
+  document.getElementById("tgChatId").value = c.chatId;
+}
+function tgSetStatus(t) { document.getElementById("tgStatus").textContent = t; }
+function saveTelegramSettings() {
+  var token = document.getElementById("tgToken").value.trim();
+  var chatId = document.getElementById("tgChatId").value.trim();
+  try { localStorage.setItem(TG_KEY, JSON.stringify({ token: token, chatId: chatId })); } catch (e) {}
+  tgSetStatus("Saved.");
+}
+function sendTelegram(text, done) {
+  var c = getTelegram();
+  if (!c.token || !c.chatId) { if (done) done(false, "Missing token or chat ID"); return; }
+  fetch("https://api.telegram.org/bot" + encodeURIComponent(c.token) + "/sendMessage", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ chat_id: c.chatId, text: text })
+  }).then(function(r) { return r.json(); })
+    .then(function(d) { if (done) done(!!d.ok, d.ok ? "" : (d.description || "Telegram error")); })
+    .catch(function() { if (done) done(false, "Network error"); });
+}
+function testTelegram() {
+  saveTelegramSettings();
+  tgSetStatus("Sending...");
+  sendTelegram("Test alert from your Crypto Terminal", function(ok, err) {
+    tgSetStatus(ok ? "Test sent. Check Telegram." : "Failed: " + err + " (open your bot and press Start first)");
+  });
+}
 function notify(text) {
+  sendTelegram("🚨 " + text);
   var box = document.getElementById('toast');
   var div = document.createElement('div');
   div.className = 'toast-item';
@@ -647,7 +696,7 @@ function fpDraw() {
 
 /* ---------- Start ---------- */
 function startDashboard() {
-  loadAlerts(); sortAlerts(); renderAlertTable();
+  loadAlerts(); sortAlerts(); renderAlertTable(); loadTelegramFields();
   buildTradingCharts();
   loadHistoricalCandles("BTCUSDT", "4h");
   pollPrices();
