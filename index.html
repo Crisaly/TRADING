@@ -21,6 +21,9 @@ h2 { margin-top: 0; color: #38bdf8; text-align: center; font-size: 1.3rem; }
 .btn-fullscreen { background: #475569; border: none; color: #fff; padding: 6px 12px; font-size: 0.8rem; font-weight: 600; border-radius: 4px; cursor: pointer; }
 .chart-relative-container { position: relative; width: 100%; height: 620px; display: flex; flex-direction: column; background: #0f172a; border-radius: 0 0 8px 8px; border: 1px solid #334155; overflow: visible; }
 #chartContainer { width: 100%; height: 100%; }
+.btn-fullscreen.active { background: #0284c7; }
+#fpCanvas { position: absolute; left: 0; top: 0; width: 100%; height: 100%; pointer-events: none; z-index: 5; display: none; }
+#fpStatus { display: none; position: absolute; top: 50px; left: 15px; z-index: 11; background: rgba(15,23,42,0.9); color: #94a3b8; border: 1px solid #334155; padding: 4px 10px; border-radius: 4px; font-size: 0.72rem; font-family: monospace; pointer-events: none; }
 .candle-timer-overlay { position: absolute; top: 15px; right: 100px; background: rgba(15, 23, 42, 0.9); color: #f43f5e; border: 1px solid #f43f5e; padding: 4px 10px; border-radius: 4px; font-family: monospace; font-size: 0.85rem; font-weight: bold; z-index: 10; pointer-events: none; }
 .chart-relative-container:fullscreen { width: 100vw !important; height: 100vh !important; border-radius: 0; }
 .chart-relative-container:-webkit-full-screen { width: 100vw !important; height: 100vh !important; border-radius: 0; }
@@ -69,6 +72,7 @@ th { color: #94a3b8; font-weight: 600; text-transform: uppercase; font-size: 0.7
         <button class="tf-btn" onclick="changeTimeframe('1M', this)">1M</button>
       </div>
       <div style="display:flex; gap:8px;">
+        <button class="btn-fullscreen" id="btnFootprint" onclick="toggleFootprint()">▦ Footprint</button>
         <button class="btn-fullscreen" id="btnRefreshChart" onclick="manualRefreshChart()">↻ Refresh</button>
         <button class="btn-fullscreen" onclick="toggleFullScreen()">⛶ Full Screen</button>
       </div>
@@ -77,6 +81,8 @@ th { color: #94a3b8; font-weight: 600; text-transform: uppercase; font-size: 0.7
       <div id="candleTimer" class="candle-timer-overlay">00:00</div>
       <div id="chartErrorBanner" style="display:none; position:absolute; top:15px; left:15px; z-index:11; background:rgba(244,63,94,0.15); color:#f43f5e; border:1px solid #f43f5e; padding:6px 12px; border-radius:4px; font-size:0.8rem;"></div>
       <div id="chartContainer"></div>
+      <canvas id="fpCanvas"></canvas>
+      <div id="fpStatus"></div>
     </div>
   </div>
 
@@ -215,6 +221,7 @@ function refitChartSoon(delayMs) {
     var wrapper = document.getElementById('fullscreenWrapper');
     if (!wrapper || !mainChart) return;
     mainChart.resize(wrapper.clientWidth, wrapper.clientHeight);
+    if (footprintOn) return;
     mainChart.timeScale().fitContent();
     padLeftEdge();
   }, delayMs);
@@ -320,14 +327,13 @@ function loadHistoricalCandles(symbol, interval) {
     startCountdownTimer();
     var small = SMALL_TFS.indexOf(currentActiveInterval) !== -1;
     var long = LONG_TFS.indexOf(currentActiveInterval) !== -1;
-    mainChart.timeScale().applyOptions({ barSpacing: (small || long) ? 10 : 7, rightOffset: 5 });
+    if (!footprintOn) mainChart.timeScale().applyOptions({ barSpacing: (small || long) ? 10 : 7, rightOffset: 5 });
     var useLog = deep || currentActiveInterval === '1w' || currentActiveInterval === '1M';
     mainChart.priceScale('right').applyOptions({
       mode: useLog ? LightweightCharts.PriceScaleMode.Logarithmic : LightweightCharts.PriceScaleMode.Normal
     });
-    mainChart.timeScale().fitContent();
-    padLeftEdge();
-    refitChartSoon(80);
+    if (footprintOn) { fpAfterLoad(); }
+    else { mainChart.timeScale().fitContent(); padLeftEdge(); refitChartSoon(80); }
     initWebSocketStream(currentActiveSymbol, currentActiveInterval);
   }).catch(function(err) {
     console.log("Engine fetch error: ", err);
@@ -422,6 +428,221 @@ function deleteAlert(id) {
   if (!confirm("Delete alert?")) return;
   alerts = alerts.filter(function(a) { return a.id !== id; });
   saveAlerts(); renderAlertTable();
+}
+
+/* ---------- Footprint candles (bid x ask volume at each price level) ---------- */
+var footprintOn = false, fpWS = null, fpRaw = [], fpBuckets = {}, fpCache = {}, fpPending = [];
+var fpBackfilled = false, fpToken = 0, fpKey = "", fpSymbol = "", fpTimer = null, fpLastId = -1;
+var FP_TFS = ['1m', '2m', '3m', '5m', '15m', '1h', '4h', '6h', '8h', '12h', '1d'];
+var FP_PAGES = 25;      // history backfill: 25 x 1000 recent trades
+var FP_SPACING = 95;    // wide bars so the numbers fit
+
+function fpSupported() { return FP_TFS.indexOf(currentActiveInterval) !== -1; }
+function fpBucketStart(tms) { var iv = getIntervalSeconds(currentActiveInterval); return Math.floor(tms / 1000 / iv) * iv; }
+function fpPush(tr) {
+  var b = fpBucketStart(tr[1]);
+  var bk = fpBuckets[b] || (fpBuckets[b] = { arr: [], v: 0 });
+  bk.arr.push(tr); bk.v++;
+}
+function fpRebuild() {
+  fpBuckets = {}; fpCache = {};
+  fpRaw.forEach(fpPush);
+}
+function fpAdd(tr) {                       // tr = [aggId, timeMs, price, qty, isSellAggressor]
+  if (tr[0] <= fpLastId) return;
+  fpLastId = tr[0];
+  fpRaw.push(tr); fpPush(tr);
+  if (fpRaw.length > 400000) { fpRaw.splice(0, 100000); fpRebuild(); }
+}
+function fpParse(m) { return [m.a, m.T, parseFloat(m.p), parseFloat(m.q), m.m === true]; }
+
+function fpStop() {
+  fpToken++;
+  if (fpWS) { fpWS.onclose = null; fpWS.onmessage = null; fpWS.close(); fpWS = null; }
+}
+function fpStart() {
+  fpStop();
+  var token = fpToken, sym = currentActiveSymbol;
+  fpSymbol = sym; fpRaw = []; fpBuckets = {}; fpCache = {}; fpPending = []; fpBackfilled = false; fpLastId = -1;
+
+  // 1) live stream first (buffered), so there's no gap once history arrives
+  fpWS = new WebSocket(WS + sym.toLowerCase() + "@aggTrade");
+  fpWS.onmessage = function(e) {
+    if (token !== fpToken) return;
+    var m = JSON.parse(e.data);
+    if (!m || m.a === undefined) return;
+    var tr = fpParse(m);
+    if (fpBackfilled) fpAdd(tr); else fpPending.push(tr);
+  };
+  fpWS.onclose = function() {
+    if (token === fpToken && footprintOn) setTimeout(function() { if (token === fpToken && footprintOn) fpStart(); }, 3000);
+  };
+
+  // 2) backfill recent history, paging backward by trade id
+  function finish(pages) {
+    if (token !== fpToken) return;
+    var all = [];
+    (pages || []).forEach(function(pg) { if (Array.isArray(pg)) pg.forEach(function(m) { all.push(fpParse(m)); }); });
+    all.sort(function(a, b) { return a[0] - b[0]; });
+    all.forEach(fpAdd);
+    fpBackfilled = true;
+    fpPending.sort(function(a, b) { return a[0] - b[0]; }).forEach(fpAdd);
+    fpPending = [];
+  }
+  fetch(API + "/api/v3/aggTrades?symbol=" + sym + "&limit=1000").then(function(r) { return r.json(); }).then(function(latest) {
+    if (!Array.isArray(latest) || !latest.length) throw new Error("no trades");
+    var firstId = latest[0].a, reqs = [];
+    for (var k = 1; k <= FP_PAGES; k++) {
+      var from = firstId - 1000 * k;
+      if (from < 0) break;
+      reqs.push(fetch(API + "/api/v3/aggTrades?symbol=" + sym + "&fromId=" + from + "&limit=1000").then(function(r) { return r.json(); }).catch(function() { return []; }));
+    }
+    return Promise.all(reqs).then(function(pages) { pages.push(latest); finish(pages); });
+  }).catch(function() { finish([]); });
+}
+
+function fpAfterLoad() {
+  var key = currentActiveSymbol + "|" + currentActiveInterval;
+  if (key === fpKey) return;               // routine candle refresh: leave the user's pan/zoom alone
+  var symbolChanged = fpSymbol !== currentActiveSymbol;
+  fpKey = key;
+  mainChart.timeScale().applyOptions({ barSpacing: FP_SPACING, rightOffset: 3 });
+  mainChart.timeScale().scrollToRealTime();
+  if (symbolChanged) fpStart(); else fpRebuild();
+}
+function toggleFootprint() {
+  footprintOn = !footprintOn;
+  var btn = document.getElementById('btnFootprint');
+  var cv = document.getElementById('fpCanvas'), st = document.getElementById('fpStatus');
+  btn.classList.toggle('active', footprintOn);
+  cv.style.display = st.style.display = footprintOn ? 'block' : 'none';
+  if (footprintOn) {
+    candlestickSeries.applyOptions({ upColor: 'rgba(38,166,154,0.3)', downColor: 'rgba(239,83,80,0.3)' });
+    fpKey = currentActiveSymbol + "|" + currentActiveInterval;
+    mainChart.timeScale().applyOptions({ barSpacing: FP_SPACING, rightOffset: 3 });
+    mainChart.timeScale().scrollToRealTime();
+    fpStart();
+    fpTimer = setInterval(fpDraw, 100);
+  } else {
+    clearInterval(fpTimer); fpStop();
+    fpRaw = []; fpBuckets = {}; fpCache = {}; fpPending = []; fpSymbol = "";
+    candlestickSeries.applyOptions({ upColor: '#26a69a', downColor: '#ef5350' });
+    fpDraw();
+    mainChart.timeScale().applyOptions({ barSpacing: 7, rightOffset: 5 });
+    mainChart.timeScale().fitContent(); padLeftEdge();
+  }
+}
+
+function niceStep(raw) {
+  if (!(raw > 0)) return 1;
+  var e = Math.pow(10, Math.floor(Math.log10(raw))), f = raw / e;
+  return (f <= 1 ? 1 : f <= 2 ? 2 : f <= 2.5 ? 2.5 : f <= 5 ? 5 : 10) * e;
+}
+function fmtQ(q) {
+  if (q <= 0) return "";
+  if (q >= 1000) return (q / 1000).toFixed(1) + "k";
+  if (q >= 100) return q.toFixed(0);
+  if (q >= 10) return q.toFixed(1);
+  if (q >= 1) return q.toFixed(2);
+  return q.toFixed(3);
+}
+function fpBins(t, step) {
+  var b = fpBuckets[t];
+  if (!b) return null;
+  var c = fpCache[t];
+  if (c && c.step === step && c.v === b.v) return c;
+  var bins = {}, bid = 0, ask = 0;
+  b.arr.forEach(function(tr) {
+    var k = Math.floor(tr[2] / step);
+    var o = bins[k] || (bins[k] = { bid: 0, ask: 0 });
+    if (tr[4]) { o.bid += tr[3]; bid += tr[3]; } else { o.ask += tr[3]; ask += tr[3]; }
+  });
+  var maxSide = 0, maxTot = 0, poc = null;
+  Object.keys(bins).forEach(function(k) {
+    var o = bins[k], tot = o.bid + o.ask;
+    maxSide = Math.max(maxSide, o.bid, o.ask);
+    if (tot > maxTot) { maxTot = tot; poc = k; }
+  });
+  c = { step: step, v: b.v, bins: bins, maxSide: maxSide, poc: poc, bid: bid, ask: ask };
+  fpCache[t] = c;
+  return c;
+}
+function fpDraw() {
+  var cv = document.getElementById('fpCanvas'), host = document.getElementById('chartContainer');
+  var w = host.clientWidth, h = host.clientHeight, dpr = window.devicePixelRatio || 1;
+  if (cv.width !== Math.round(w * dpr) || cv.height !== Math.round(h * dpr)) { cv.width = Math.round(w * dpr); cv.height = Math.round(h * dpr); }
+  var ctx = cv.getContext('2d');
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, w, h);
+  if (!footprintOn || !mainChart) return;
+  var st = document.getElementById('fpStatus');
+  function status(txt) { if (st.innerText !== txt) st.innerText = txt; }
+  if (!fpSupported()) { status("Footprint works on 1m – 1D timeframes"); return; }
+  if (!fpBackfilled) { status("Loading recent trades…"); return; }
+  var first = fpRaw.length ? new Date(fpRaw[0][1]).toLocaleTimeString() : "–";
+  status(fpRaw.length.toLocaleString() + " trades  ·  history since " + first + "  ·  bid × ask");
+
+  var ts = mainChart.timeScale();
+  var plotW = w - mainChart.priceScale('right').width(), plotH = h - ts.height();
+  var vr = ts.getVisibleRange();
+  var hiP = candlestickSeries.coordinateToPrice(0), loP = candlestickSeries.coordinateToPrice(plotH);
+  if (!vr || hiP == null || loP == null) return;
+  var iv = getIntervalSeconds(currentActiveInterval);
+  if ((vr.to - vr.from) / iv > 60) { status("Zoom in to see footprint cells"); return; }
+  var step = niceStep(Math.abs(hiP - loP) / (plotH / 16));
+
+  var cols = [];
+  for (var t = Math.floor(vr.from / iv) * iv - iv; t <= vr.to + iv; t += iv) {
+    var x = ts.timeToCoordinate(t);
+    if (x !== null) cols.push({ t: t, x: x });
+  }
+  var sp = 60;
+  for (var i = 1; i < cols.length; i++) {
+    if (Math.abs(cols[i].t - cols[i - 1].t - iv) < 1) { sp = cols[i].x - cols[i - 1].x; break; }
+  }
+  var half = sp * 0.45, showText = sp >= 64;
+
+  ctx.save();
+  ctx.beginPath(); ctx.rect(0, 0, plotW, plotH); ctx.clip();
+  cols.forEach(function(c) {
+    var d = fpBins(c.t, step);
+    if (!d) return;
+    var x0 = c.x - half, mid = c.x, x1 = c.x + half;
+    Object.keys(d.bins).forEach(function(k) {
+      var o = d.bins[k];
+      var yT = candlestickSeries.priceToCoordinate((+k + 1) * step), yB = candlestickSeries.priceToCoordinate(+k * step);
+      if (yT === null || yB === null) return;
+      var rh = yB - yT;
+      if (rh < 2 || yB < 0 || yT > plotH) return;
+      ctx.fillStyle = 'rgba(239,83,80,' + (0.08 + 0.5 * o.bid / d.maxSide) + ')';
+      ctx.fillRect(x0, yT + 0.5, half, rh - 1);
+      ctx.fillStyle = 'rgba(38,166,154,' + (0.08 + 0.5 * o.ask / d.maxSide) + ')';
+      ctx.fillRect(mid, yT + 0.5, half, rh - 1);
+      if (showText && rh >= 10) {
+        var fs = Math.min(11, Math.floor(rh - 2)), yM = yT + rh / 2;
+        ctx.font = fs + 'px monospace'; ctx.textBaseline = 'middle';
+        var bidImb = o.bid >= 3 * o.ask && o.bid > 0, askImb = o.ask >= 3 * o.bid && o.ask > 0;
+        ctx.textAlign = 'right';
+        ctx.fillStyle = bidImb ? '#fecaca' : '#cbd5e1';
+        ctx.font = (bidImb ? 'bold ' : '') + fs + 'px monospace';
+        ctx.fillText(fmtQ(o.bid), mid - 3, yM);
+        ctx.textAlign = 'left';
+        ctx.fillStyle = askImb ? '#bbf7d0' : '#cbd5e1';
+        ctx.font = (askImb ? 'bold ' : '') + fs + 'px monospace';
+        ctx.fillText(fmtQ(o.ask), mid + 3, yM);
+      }
+      if (k === d.poc) { ctx.strokeStyle = '#facc15'; ctx.lineWidth = 1; ctx.strokeRect(x0, yT + 0.5, x1 - x0, rh - 1); }
+    });
+    if (sp >= 50) {
+      var delta = d.ask - d.bid;
+      ctx.fillStyle = 'rgba(15,23,42,0.88)'; ctx.fillRect(x0, plotH - 30, x1 - x0, 28);
+      ctx.font = '10px monospace'; ctx.textAlign = 'center'; ctx.textBaseline = 'alphabetic';
+      ctx.fillStyle = '#94a3b8'; ctx.fillText('V ' + fmtQ(d.ask + d.bid), c.x, plotH - 19);
+      ctx.fillStyle = delta >= 0 ? '#4ade80' : '#f87171';
+      ctx.fillText('Δ ' + (delta >= 0 ? '+' : '-') + (fmtQ(Math.abs(delta)) || '0'), c.x, plotH - 7);
+    }
+  });
+  ctx.restore();
 }
 
 /* ---------- Start ---------- */
