@@ -189,20 +189,25 @@ function saveTelegramSettings() {
 }
 function sendTelegram(text, done) {
   var c = getTelegram();
-  if (!c.token || !c.chatId) { if (done) done(false, "Missing token or chat ID"); return; }
-  fetch("https://api.telegram.org/bot" + encodeURIComponent(c.token) + "/sendMessage", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ chat_id: c.chatId, text: text })
-  }).then(function(r) { return r.json(); })
+  var token = (c.token || "").replace(/\s/g, "");
+  var chatId = String(c.chatId || "").replace(/\s/g, "");
+  if (!token || !chatId) { if (done) done(false, "Missing token or chat ID"); return; }
+  var url = "https://api.telegram.org/bot" + token + "/sendMessage?chat_id=" +
+    encodeURIComponent(chatId) + "&text=" + encodeURIComponent(text);
+  fetch(url)
+    .then(function(r) { return r.json(); })
     .then(function(d) { if (done) done(!!d.ok, d.ok ? "" : (d.description || "Telegram error")); })
-    .catch(function() { if (done) done(false, "Network error"); });
+    .catch(function(e) {
+      var img = new Image();   // fallback: fire-and-forget request, works even if fetch is blocked
+      img.src = url;
+      if (done) done(false, "Browser could not reach api.telegram.org (" + (e && e.message ? e.message : "blocked") + "). Try disabling ad blocker/VPN for this page.");
+    });
 }
 function testTelegram() {
   saveTelegramSettings();
   tgSetStatus("Sending...");
   sendTelegram("Test alert from your Crypto Terminal", function(ok, err) {
-    tgSetStatus(ok ? "Test sent. Check Telegram." : "Failed: " + err + " (open your bot and press Start first)");
+    tgSetStatus(ok ? "Test sent. Check Telegram." : "Failed: " + err);
   });
 }
 function notify(text) {
