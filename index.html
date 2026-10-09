@@ -95,7 +95,8 @@ th { color: #94a3b8; font-weight: 600; text-transform: uppercase; font-size: 0.7
         <button onclick="submitNewAlert()" style="padding:0 20px;">Set Alert</button>
       </div>
       <p class="note">Alerts are saved in this browser and checked live while this page is open.</p>
-      <h2 style="margin-top:22px;">Telegram Alerts</h2>
+      <h2 id="tgHeader" onclick="toggleTelegram()" style="margin-top:22px; cursor:pointer; user-select:none;">Telegram Alerts <span id="tgArrow">&#9654;</span></h2>
+      <div id="tgPanel" style="display:none;">
       <div style="display:flex; gap:10px; margin-top:10px;">
         <input type="password" id="tgToken" placeholder="Bot token (from @BotFather)" autocomplete="off" style="flex:2;">
         <input type="text" id="tgChatId" placeholder="Chat ID" style="flex:1;">
@@ -105,6 +106,7 @@ th { color: #94a3b8; font-weight: 600; text-transform: uppercase; font-size: 0.7
         <button onclick="testTelegram()" style="flex:1; padding:10px;">Send Test</button>
       </div>
       <p class="note" id="tgStatus">Token and chat ID are stored only in this browser (not in the code).</p>
+      </div>
     </div>
     <div class="card" style="padding:20px;">
       <h2>Active Target Alert Monitor Grid</h2>
@@ -174,6 +176,18 @@ function getTelegram() {
   var c = {};
   try { c = JSON.parse(localStorage.getItem(TG_KEY)) || {}; } catch (e) {}
   return { token: c.token || "", chatId: c.chatId || TELEGRAM_CHAT_ID_DEFAULT };
+}
+function toggleTelegram(force) {
+  var panel = document.getElementById("tgPanel");
+  var open = (typeof force === "boolean") ? force : panel.style.display === "none";
+  panel.style.display = open ? "block" : "none";
+  document.getElementById("tgArrow").innerHTML = open ? "&#9660;" : "&#9654;";
+  try { localStorage.setItem("cryptoTerminalTgOpen", open ? "1" : "0"); } catch (e) {}
+}
+function restoreTelegramToggle() {
+  var o = false;
+  try { o = localStorage.getItem("cryptoTerminalTgOpen") === "1"; } catch (e) {}
+  toggleTelegram(o);
 }
 function loadTelegramFields() {
   var c = getTelegram();
@@ -701,7 +715,7 @@ function fpDraw() {
 
 /* ---------- Start ---------- */
 function startDashboard() {
-  loadAlerts(); sortAlerts(); renderAlertTable(); loadTelegramFields();
+  loadAlerts(); sortAlerts(); renderAlertTable(); loadTelegramFields(); restoreTelegramToggle();
   buildTradingCharts();
   loadHistoricalCandles("BTCUSDT", "4h");
   pollPrices();
