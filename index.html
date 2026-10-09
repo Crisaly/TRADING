@@ -1,0 +1,451 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Multi-Alert Crypto Terminal</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/lightweight-charts@4.2.3/dist/lightweight-charts.standalone.production.js"></script>
+<style>
+body { font-family: 'Inter', sans-serif; background-color: #0f172a; color: #f8fafc; margin: 0; padding: 20px; }
+.container { max-width: 1200px; margin: 0 auto; display: flex; flex-direction: column; gap: 20px; }
+.grid-2col { display: grid; grid-template-columns: 1fr 1.4fr; gap: 20px; }
+@media(max-width: 900px) { .grid-2col { grid-template-columns: 1fr; } }
+.card { background: #1e293b; border-radius: 12px; padding: 25px; border: 1px solid #334155; position: relative; }
+h2 { margin-top: 0; color: #38bdf8; text-align: center; font-size: 1.3rem; }
+.chart-controls { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; background: #0f172a; padding: 10px 15px; border-radius: 8px 8px 0 0; border: 1px solid #334155; border-bottom: none; gap: 10px; }
+.timeframe-group { display: flex; flex-wrap: wrap; gap: 6px; }
+.tf-btn { background: #1e293b; border: 1px solid #475569; color: #94a3b8; padding: 6px 12px; font-size: 0.8rem; font-weight: 600; border-radius: 4px; cursor: pointer; }
+.tf-btn.active { background: #0284c7; color: #fff; border-color: #0284c7; }
+.tf-btn:hover:not(.active) { background: #334155; color: #fff; }
+.btn-fullscreen { background: #475569; border: none; color: #fff; padding: 6px 12px; font-size: 0.8rem; font-weight: 600; border-radius: 4px; cursor: pointer; }
+.chart-relative-container { position: relative; width: 100%; height: 620px; display: flex; flex-direction: column; background: #0f172a; border-radius: 0 0 8px 8px; border: 1px solid #334155; overflow: visible; }
+#chartContainer { width: 100%; height: 100%; }
+.candle-timer-overlay { position: absolute; top: 15px; right: 100px; background: rgba(15, 23, 42, 0.9); color: #f43f5e; border: 1px solid #f43f5e; padding: 4px 10px; border-radius: 4px; font-family: monospace; font-size: 0.85rem; font-weight: bold; z-index: 10; pointer-events: none; }
+.chart-relative-container:fullscreen { width: 100vw !important; height: 100vh !important; border-radius: 0; }
+.chart-relative-container:-webkit-full-screen { width: 100vw !important; height: 100vh !important; border-radius: 0; }
+input, select { width: 100%; padding: 10px; background: #0f172a; border: 1px solid #334155; border-radius: 6px; color: #fff; box-sizing: border-box; }
+button { padding: 10px; background: #0284c7; color: white; border: none; border-radius: 6px; font-weight: 600; cursor: pointer; transition: background 0.2s; }
+button:hover { background: #0369a1; }
+table { width: 100%; border-collapse: collapse; margin-top: 15px; text-align: left; }
+th, td { padding: 12px; border-bottom: 1px solid #334155; font-size: 0.9rem; }
+th { color: #94a3b8; font-weight: 600; text-transform: uppercase; font-size: 0.75rem; }
+.status-active { color: #4ade80; font-weight: 600; }
+.status-triggered { color: #94a3b8; font-style: italic; }
+.btn-delete { background: #ef4444; padding: 4px 8px; font-size: 0.75rem; }
+.btn-delete:hover { background: #dc2626; }
+.live-badge { display: inline-flex; align-items: center; gap: 6px; font-size: 0.72rem; color: #4ade80; background: rgba(74, 222, 128, 0.1); padding: 3px 8px; border-radius: 20px; border: 1px solid rgba(74, 222, 128, 0.2); }
+.dot { width: 6px; height: 6px; background: #4ade80; border-radius: 50%; animation: blink 1s infinite; }
+@keyframes blink { 0%, 100% { opacity: 0.3; } 50% { opacity: 1; } }
+.note { color: #64748b; font-size: 0.75rem; margin: 12px 0 0; text-align: center; }
+#toast { position: fixed; top: 20px; right: 20px; z-index: 1000; display: flex; flex-direction: column; gap: 8px; }
+.toast-item { background: #166534; border: 1px solid #4ade80; color: #fff; padding: 12px 16px; border-radius: 8px; font-weight: 600; box-shadow: 0 4px 16px rgba(0,0,0,.4); }
+</style>
+</head>
+<body>
+<div id="toast"></div>
+<div class="container">
+  <div class="card">
+    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
+      <h2 id="chartTitle" style="margin:0;">BTCUSDT Dashboard</h2>
+      <div class="live-badge"><span class="dot"></span>LIVE SIGNAL ENGINE</div>
+    </div>
+    <div class="chart-controls">
+      <div class="timeframe-group">
+        <button class="tf-btn" onclick="changeTimeframe('1m', this)">1m</button>
+        <button class="tf-btn" onclick="changeTimeframe('2m', this)">2m</button>
+        <button class="tf-btn" onclick="changeTimeframe('3m', this)">3m</button>
+        <button class="tf-btn" onclick="changeTimeframe('5m', this)">5m</button>
+        <button class="tf-btn" onclick="changeTimeframe('15m', this)">15m</button>
+        <button class="tf-btn" onclick="changeTimeframe('1h', this)">1H</button>
+        <button class="tf-btn active" onclick="changeTimeframe('4h', this)">4H</button>
+        <button class="tf-btn" onclick="changeTimeframe('6h', this)">6H</button>
+        <button class="tf-btn" onclick="changeTimeframe('8h', this)">8H</button>
+        <button class="tf-btn" onclick="changeTimeframe('12h', this)">12H</button>
+        <button class="tf-btn" onclick="changeTimeframe('1d', this)">1D</button>
+        <button class="tf-btn" onclick="changeTimeframe('2d', this)">2D</button>
+        <button class="tf-btn" onclick="changeTimeframe('5d', this)">5D</button>
+        <button class="tf-btn" onclick="changeTimeframe('1w', this)">1W</button>
+        <button class="tf-btn" onclick="changeTimeframe('1M', this)">1M</button>
+      </div>
+      <div style="display:flex; gap:8px;">
+        <button class="btn-fullscreen" id="btnRefreshChart" onclick="manualRefreshChart()">↻ Refresh</button>
+        <button class="btn-fullscreen" onclick="toggleFullScreen()">⛶ Full Screen</button>
+      </div>
+    </div>
+    <div id="fullscreenWrapper" class="chart-relative-container">
+      <div id="candleTimer" class="candle-timer-overlay">00:00</div>
+      <div id="chartErrorBanner" style="display:none; position:absolute; top:15px; left:15px; z-index:11; background:rgba(244,63,94,0.15); color:#f43f5e; border:1px solid #f43f5e; padding:6px 12px; border-radius:4px; font-size:0.8rem;"></div>
+      <div id="chartContainer"></div>
+    </div>
+  </div>
+
+  <div class="grid-2col">
+    <div class="card" style="padding:20px;">
+      <h2>Set Automated Target Alert</h2>
+      <div style="display:flex; gap:10px; margin-top:10px;">
+        <input type="text" id="ticker" placeholder="Symbol (e.g. BTCUSDT)" value="BTCUSDT" style="flex:1;">
+        <input type="number" id="targetPrice" placeholder="Target Price ($)" style="flex:1;">
+        <button onclick="submitNewAlert()" style="padding:0 20px;">Set Alert</button>
+      </div>
+      <p class="note">Alerts are saved in this browser and checked live while this page is open.</p>
+    </div>
+    <div class="card" style="padding:20px;">
+      <h2>Active Target Alert Monitor Grid</h2>
+      <table>
+        <thead><tr><th>Symbol</th><th>Target Price</th><th>Live Price</th><th>Status</th><th>Action</th></tr></thead>
+        <tbody id="alertTableBody"></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<script>
+var API = "https://api.binance.com";
+var WS = "wss://stream.binance.com:9443/ws/";
+var STORE_KEY = "cryptoTerminalAlerts.v1";
+
+var mainChart, candlestickSeries;
+var currentActiveSymbol = "BTCUSDT";
+var currentActiveInterval = "4h";
+var lastCandleTime = 0;
+var countdownIntervalId = null;
+var webSocketConn = null;
+var lastKnownPricesMap = {};
+var currentAggBar = null;
+var resizeDebounceId = null;
+var alerts = [];
+
+var AGGREGATE_MAP = { '2m': { base: '1m' }, '2d': { base: '1d' }, '5d': { base: '1d' } };
+var SMALL_TFS = ['1m', '2m', '3m', '5m', '15m'];
+var LONG_TFS = ['2d', '5d', '1w', '1M'];
+var DEEP_HISTORY_TFS = ['1d', '2d', '5d'];
+var DEEP_HISTORY_TARGET = 4000;
+
+/* ---------- Alert storage (replaces the Google Sheet) ---------- */
+function loadAlerts() {
+  try { alerts = JSON.parse(localStorage.getItem(STORE_KEY)) || []; } catch (e) { alerts = []; }
+}
+function saveAlerts() {
+  try { localStorage.setItem(STORE_KEY, JSON.stringify(alerts)); } catch (e) {}
+}
+function normalizeSymbol(s) {
+  s = String(s || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+  if (s && s.indexOf("USDT") === -1) s += "USDT";
+  return s;
+}
+function sortAlerts() {
+  // Active on top, Triggered at the bottom (same as the old autoArrangeSheet)
+  alerts.sort(function(a, b) { return (a.status === "Active" ? 0 : 1) - (b.status === "Active" ? 0 : 1); });
+}
+
+/* ---------- Alert engine (replaces checkCryptoPrice + the 1-minute trigger) ---------- */
+function beep() {
+  try {
+    var ctx = new (window.AudioContext || window.webkitAudioContext)();
+    [0, 0.25, 0.5].forEach(function(t) {
+      var o = ctx.createOscillator(), g = ctx.createGain();
+      o.frequency.value = 880; o.connect(g); g.connect(ctx.destination);
+      g.gain.setValueAtTime(0.15, ctx.currentTime + t);
+      o.start(ctx.currentTime + t); o.stop(ctx.currentTime + t + 0.15);
+    });
+  } catch (e) {}
+}
+function notify(text) {
+  var box = document.getElementById('toast');
+  var div = document.createElement('div');
+  div.className = 'toast-item';
+  div.textContent = text;
+  box.appendChild(div);
+  setTimeout(function() { div.remove(); }, 15000);
+  beep();
+  try {
+    if ("Notification" in window && Notification.permission === "granted") new Notification("Crypto Alert", { body: text });
+  } catch (e) {}
+}
+function checkAlerts() {
+  var changed = false;
+  alerts.forEach(function(a) {
+    var price = lastKnownPricesMap[a.ticker];
+    if (a.status !== "Active" || !price) return;
+    if (price >= a.target) {
+      a.status = "Triggered (" + new Date().toLocaleTimeString() + ")";
+      a.livePrice = price;
+      notify(a.ticker + " reached $" + price.toLocaleString() + " (target $" + a.target.toLocaleString() + ")");
+      changed = true;
+    }
+  });
+  if (changed) { sortAlerts(); saveAlerts(); renderAlertTable(); }
+}
+function pollPrices() {
+  var symbols = {};
+  alerts.forEach(function(a) { symbols[a.ticker] = true; });
+  Object.keys(symbols).forEach(function(sym) {
+    fetch(API + "/api/v3/ticker/price?symbol=" + sym)
+      .then(function(r) { return r.json(); })
+      .then(function(d) {
+        if (d && d.price) { lastKnownPricesMap[sym] = parseFloat(d.price); updateTableLivePricesOnly(); checkAlerts(); }
+      }).catch(function() {});
+  });
+}
+
+/* ---------- Chart ---------- */
+function buildTradingCharts() {
+  mainChart = LightweightCharts.createChart(document.getElementById('chartContainer'), {
+    autoSize: true,
+    layout: { background: { color: '#0f172a' }, textColor: '#94a3b8' },
+    grid: { vertLines: { visible: false }, horzLines: { visible: false } },
+    crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
+    rightPriceScale: { borderColor: '#334155', autoScale: true, scaleMargins: { top: 0.12, bottom: 0.12 } },
+    timeScale: { borderColor: '#334155', timeVisible: true, rightOffset: 5, barSpacing: 8 }
+  });
+  candlestickSeries = mainChart.addCandlestickSeries({
+    upColor: '#26a69a', downColor: '#ef5350', borderVisible: false,
+    wickUpColor: '#26a69a', wickDownColor: '#ef5350'
+  });
+  document.addEventListener('fullscreenchange', function() { refitChartSoon(150); });
+  document.addEventListener('webkitfullscreenchange', function() { refitChartSoon(150); });
+  window.addEventListener('resize', function() {
+    clearTimeout(resizeDebounceId);
+    resizeDebounceId = setTimeout(function() { refitChartSoon(0); }, 150);
+  });
+}
+function refitChartSoon(delayMs) {
+  setTimeout(function() {
+    var wrapper = document.getElementById('fullscreenWrapper');
+    if (!wrapper || !mainChart) return;
+    mainChart.resize(wrapper.clientWidth, wrapper.clientHeight);
+    mainChart.timeScale().fitContent();
+    padLeftEdge();
+  }, delayMs);
+}
+function getIntervalSeconds(interval) {
+  switch (interval) {
+    case '1m': return 60; case '2m': return 120; case '3m': return 180; case '5m': return 300; case '15m': return 900;
+    case '1h': return 3600; case '4h': return 14400; case '6h': return 21600; case '8h': return 28800; case '12h': return 43200;
+    case '1d': return 86400; case '2d': return 2 * 86400; case '5d': return 5 * 86400;
+    case '1w': return 7 * 86400; case '1M': return 30 * 86400;
+    default: return 3600;
+  }
+}
+function aggregateCandlesByTime(candles, bucketSeconds) {
+  var buckets = {}, order = [];
+  candles.forEach(function(c) {
+    var start = Math.floor(c.time / bucketSeconds) * bucketSeconds;
+    if (!buckets[start]) {
+      buckets[start] = { time: start, open: c.open, high: c.high, low: c.low, close: c.close };
+      order.push(start);
+    } else {
+      var b = buckets[start];
+      b.high = Math.max(b.high, c.high); b.low = Math.min(b.low, c.low); b.close = c.close;
+    }
+  });
+  return order.map(function(t) { return buckets[t]; });
+}
+function mergeIntoAggregatedBar(baseTick, bucketSeconds) {
+  var start = Math.floor(baseTick.time / bucketSeconds) * bucketSeconds;
+  if (!currentAggBar || currentAggBar.time !== start) {
+    currentAggBar = { time: start, open: baseTick.open, high: baseTick.high, low: baseTick.low, close: baseTick.close };
+  } else {
+    currentAggBar.high = Math.max(currentAggBar.high, baseTick.high);
+    currentAggBar.low = Math.min(currentAggBar.low, baseTick.low);
+    currentAggBar.close = baseTick.close;
+  }
+  candlestickSeries.update(currentAggBar);
+}
+function fetchKlinesPaginated(symbol, interval, totalCandles) {
+  var all = [], endTime = null, batch = 1000;
+  function next() {
+    var url = API + "/api/v3/klines?symbol=" + symbol + "&interval=" + interval + "&limit=" + batch;
+    if (endTime) url += "&endTime=" + endTime;
+    return fetch(url).then(function(r) { return r.json(); }).then(function(data) {
+      if (!Array.isArray(data) || data.length === 0) return;
+      all = data.concat(all);
+      if (data.length === batch && all.length < totalCandles) { endTime = data[0][0] - 1; return next(); }
+    });
+  }
+  return next().then(function() { return all; });
+}
+function padLeftEdge() {
+  var range = mainChart.timeScale().getVisibleLogicalRange();
+  if (range) mainChart.timeScale().setVisibleLogicalRange({ from: range.from - 2, to: range.to });
+}
+function initWebSocketStream(symbol, interval) {
+  if (webSocketConn) { webSocketConn.onclose = null; webSocketConn.close(); }
+  var agg = AGGREGATE_MAP[interval];
+  var streamInterval = agg ? agg.base : interval;
+  webSocketConn = new WebSocket(WS + symbol.toLowerCase() + "@kline_" + streamInterval);
+  webSocketConn.onclose = function() {
+    if (symbol === currentActiveSymbol && interval === currentActiveInterval) {
+      setTimeout(function() { initWebSocketStream(symbol, interval); }, 3000);
+    }
+  };
+  webSocketConn.onmessage = function(event) {
+    var msg = JSON.parse(event.data);
+    if (!msg || !msg.k) return;
+    var k = msg.k, tickPrice = parseFloat(k.c);
+    lastKnownPricesMap[symbol] = tickPrice;
+    updateTableLivePricesOnly();
+    checkAlerts();
+    var baseTick = { time: k.t / 1000, open: parseFloat(k.o), high: parseFloat(k.h), low: parseFloat(k.l), close: tickPrice };
+    if (!agg) candlestickSeries.update(baseTick);
+    else mergeIntoAggregatedBar(baseTick, getIntervalSeconds(interval));
+  };
+}
+function showChartError(message) {
+  var banner = document.getElementById('chartErrorBanner');
+  banner.innerText = message || "";
+  banner.style.display = message ? 'block' : 'none';
+}
+function loadHistoricalCandles(symbol, interval) {
+  if (symbol) currentActiveSymbol = normalizeSymbol(symbol);
+  if (interval) currentActiveInterval = interval;
+  currentAggBar = null;
+  showChartError(null);
+  document.getElementById('chartTitle').innerText = currentActiveSymbol + " (" + currentActiveInterval.toUpperCase() + ") Candlestick Feed";
+  var agg = AGGREGATE_MAP[currentActiveInterval];
+  var fetchInterval = agg ? agg.base : currentActiveInterval;
+  var deep = DEEP_HISTORY_TFS.indexOf(currentActiveInterval) !== -1;
+  var p = deep
+    ? fetchKlinesPaginated(currentActiveSymbol, fetchInterval, DEEP_HISTORY_TARGET)
+    : fetch(API + "/api/v3/klines?symbol=" + currentActiveSymbol + "&interval=" + fetchInterval + "&limit=1000").then(function(r) { return r.json(); });
+  p.then(function(data) {
+    if (!data || !Array.isArray(data) || data.length === 0) { showChartError("No candle data returned — try Refresh."); return; }
+    var candleData = data.map(function(d) {
+      return { time: d[0] / 1000, open: parseFloat(d[1]), high: parseFloat(d[2]), low: parseFloat(d[3]), close: parseFloat(d[4]) };
+    });
+    if (agg) candleData = aggregateCandlesByTime(candleData, getIntervalSeconds(currentActiveInterval));
+    candlestickSeries.setData(candleData);
+    lastCandleTime = candleData[candleData.length - 1].time;
+    startCountdownTimer();
+    var small = SMALL_TFS.indexOf(currentActiveInterval) !== -1;
+    var long = LONG_TFS.indexOf(currentActiveInterval) !== -1;
+    mainChart.timeScale().applyOptions({ barSpacing: (small || long) ? 10 : 7, rightOffset: 5 });
+    var useLog = deep || currentActiveInterval === '1w' || currentActiveInterval === '1M';
+    mainChart.priceScale('right').applyOptions({
+      mode: useLog ? LightweightCharts.PriceScaleMode.Logarithmic : LightweightCharts.PriceScaleMode.Normal
+    });
+    mainChart.timeScale().fitContent();
+    padLeftEdge();
+    refitChartSoon(80);
+    initWebSocketStream(currentActiveSymbol, currentActiveInterval);
+  }).catch(function(err) {
+    console.log("Engine fetch error: ", err);
+    showChartError("Couldn't load candles (network error) — try Refresh.");
+  });
+}
+function manualRefreshChart() {
+  var btn = document.getElementById('btnRefreshChart');
+  btn.disabled = true;
+  var original = btn.innerText;
+  btn.innerText = "↻ Refreshing...";
+  loadHistoricalCandles(currentActiveSymbol, currentActiveInterval);
+  setTimeout(function() { btn.disabled = false; btn.innerText = original; }, 1000);
+}
+function startCountdownTimer() {
+  if (countdownIntervalId) clearInterval(countdownIntervalId);
+  var duration = getIntervalSeconds(currentActiveInterval);
+  var el = document.getElementById('candleTimer');
+  countdownIntervalId = setInterval(function() {
+    var remaining = (lastCandleTime + duration) - Math.floor(Date.now() / 1000);
+    if (remaining <= 0) {
+      el.innerText = "00:00";
+      loadHistoricalCandles(currentActiveSymbol, currentActiveInterval);
+    } else {
+      var d = Math.floor(remaining / 86400), h = Math.floor((remaining % 86400) / 3600);
+      var m = Math.floor((remaining % 3600) / 60), s = remaining % 60;
+      el.innerText = (d > 0 ? d + "d " : "") + (h > 0 ? h + ":" : "") + (m < 10 ? "0" + m : m) + ":" + (s < 10 ? "0" + s : s);
+    }
+  }, 1000);
+}
+function changeTimeframe(interval, element) {
+  document.querySelectorAll('.tf-btn').forEach(function(b) { b.classList.remove('active'); });
+  element.classList.add('active');
+  loadHistoricalCandles(currentActiveSymbol, interval);
+}
+function toggleFullScreen() {
+  var el = document.getElementById('fullscreenWrapper');
+  if (!document.fullscreenElement) (el.requestFullscreen ? el.requestFullscreen() : el.webkitRequestFullscreen());
+  else document.exitFullscreen();
+  refitChartSoon(200);
+}
+
+/* ---------- Alert table / actions ---------- */
+function fmtPrice(p) { return "$" + p.toLocaleString(undefined, { minimumFractionDigits: 2 }); }
+function updateTableLivePricesOnly() {
+  document.querySelectorAll("#alertTableBody tr[data-ticker]").forEach(function(row) {
+    var p = lastKnownPricesMap[row.getAttribute("data-ticker")];
+    var cell = row.querySelector(".live-price-cell");
+    if (p && cell) cell.innerText = fmtPrice(p);
+  });
+}
+function renderAlertTable() {
+  var body = document.getElementById('alertTableBody');
+  if (alerts.length === 0) {
+    body.innerHTML = "<tr><td colspan='5' style='text-align:center; color:#64748b;'>No active monitor options found.</td></tr>";
+    return;
+  }
+  body.innerHTML = "";
+  alerts.forEach(function(a) {
+    var tr = document.createElement('tr');
+    tr.style.cursor = "pointer";
+    tr.setAttribute("data-ticker", a.ticker);
+    var live = lastKnownPricesMap[a.ticker] || a.livePrice;
+    var cls = a.status === "Active" ? "status-active" : "status-triggered";
+    tr.innerHTML =
+      "<td><b></b></td><td></td><td class='live-price-cell'>" + (live ? fmtPrice(live) : "Loading...") + "</td>" +
+      "<td class='" + cls + "'></td><td><button class='btn-delete'>Remove</button></td>";
+    var tds = tr.querySelectorAll("td");
+    tds[0].firstChild.textContent = a.ticker;
+    tds[1].textContent = "$" + a.target.toLocaleString();
+    tds[3].textContent = a.status;
+    tr.addEventListener("click", function() { loadHistoricalCandles(a.ticker, currentActiveInterval); });
+    tr.querySelector(".btn-delete").addEventListener("click", function(e) { e.stopPropagation(); deleteAlert(a.id); });
+    body.appendChild(tr);
+  });
+}
+function submitNewAlert() {
+  var t = normalizeSymbol(document.getElementById('ticker').value);
+  var p = parseFloat(document.getElementById('targetPrice').value);
+  if (!t || isNaN(p)) return alert("Fill fields!");
+  if ("Notification" in window && Notification.permission === "default") Notification.requestPermission();
+  fetch(API + "/api/v3/ticker/price?symbol=" + t).then(function(r) { return r.json(); }).then(function(d) {
+    if (!d || !d.price) return alert("Unknown symbol: " + t);
+    lastKnownPricesMap[t] = parseFloat(d.price);
+    alerts.push({ id: Date.now() + Math.random(), ticker: t, target: p, status: "Active" });
+    sortAlerts(); saveAlerts(); renderAlertTable();
+    document.getElementById('targetPrice').value = "";
+    loadHistoricalCandles(t, currentActiveInterval);
+  }).catch(function() { alert("Couldn't reach Binance — check your connection."); });
+}
+function deleteAlert(id) {
+  if (!confirm("Delete alert?")) return;
+  alerts = alerts.filter(function(a) { return a.id !== id; });
+  saveAlerts(); renderAlertTable();
+}
+
+/* ---------- Start ---------- */
+function startDashboard() {
+  loadAlerts(); sortAlerts(); renderAlertTable();
+  buildTradingCharts();
+  loadHistoricalCandles("BTCUSDT", "4h");
+  pollPrices();
+  setInterval(pollPrices, 5000);
+}
+window.onload = function() {
+  if (typeof LightweightCharts === "undefined") {
+    var fb = document.createElement('script');
+    fb.src = "https://unpkg.com/lightweight-charts@4.2.3/dist/lightweight-charts.standalone.production.js";
+    fb.onload = startDashboard;
+    fb.onerror = function() {
+      document.getElementById('chartContainer').innerHTML =
+        "<div style='padding:20px;color:#f43f5e;'>Chart library failed to load. Check your network/ad-blocker and reload the page.</div>";
+    };
+    document.head.appendChild(fb);
+  } else {
+    startDashboard();
+  }
+};
+</script>
+</body>
+</html>
